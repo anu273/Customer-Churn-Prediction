@@ -27,7 +27,7 @@ def train_models():
     global rf_model, gb_model, lgbm_model
 
     # If models are already trained, just return them
-    if rf_model is not None and gb_model is not None and lgbm_model is not None and scaler is not None:
+    if rf_model is not None and gb_model is not None and lgbm_model is not None:
         return rf_model, gb_model, lgbm_model
 
     # Otherwise, train models
@@ -125,4 +125,5 @@ def model_metrics():
     metrics = metrics_data
     roc = roc_data
     return metrics, roc 
+
 
