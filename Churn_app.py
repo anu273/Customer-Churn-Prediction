@@ -5,6 +5,7 @@ import joblib
 import plotly.express as px
 import plotly.graph_objects as go
 from model_prediction import predict_all_models, data, model_metrics
+from Model_Drift import model_drift_monitoring, csi_feature_drift
 
 
 # --- Page Configuration ---
@@ -75,10 +76,11 @@ st.markdown("""
 
 
 # --- Tabs Layout ---
-tab1, tab2, tab3 = st.tabs([
-    "🔮 Predict Customer Churn", 
-    "📊 Data Visualizations & Explorer", 
-    "🤖 Model Comparison & Performance"
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🔮 Predict Customer Churn",
+    "📊 Data Visualizations & Explorer",
+    "🤖 Model Comparison & Performance",
+    "📈 Model Monitoring & Drift Detection"
 ])
 
 
@@ -129,7 +131,10 @@ with tab1:
         }
 
         # Call the model prediction function
+
         results = predict_all_models(input_dict)
+
+        
 
         # Display results in a single row with updated style and color
         st.subheader("📌 Prediction Results")
@@ -426,3 +431,298 @@ with tab3:
 
     else:
         st.info(f"Feature importance not available for {model_select}")
+
+
+# --- Tab 4: Model Monitoring & Drift Detection ---
+with tab4:
+    st.header("📈 Model Monitoring & Drift Detection")
+
+    # Load data
+    df = data()
+    all_metrics, roc = model_metrics()
+
+    
+    # --- Model Drift Monitoring ---
+    st.subheader("🤖 Model Drift Monitoring")
+
+    # Run model drift monitoring
+    if "drift_results" not in st.session_state:
+        st.session_state.drift_results = model_drift_monitoring()
+    drift_results = st.session_state.drift_results
+    
+
+    # Display results in a table
+    drift_df = pd.DataFrame.from_dict(drift_results, orient='index')
+    drift_df = drift_df.reset_index().rename(columns={'index': 'Model'})
+
+    # Add drift level based on PSI
+    def get_drift_level(psi):
+        if psi < 0.1:
+            return "Low"
+        elif psi < 0.25:
+            return "Moderate"
+        else:
+            return "High"
+
+    drift_df['Drift Level'] = drift_df['Prediction Drift (PSI)'].apply(get_drift_level)
+
+    st.dataframe(drift_df.style.format({
+        'Refernece KS': '{:.3f}',
+        'Current KS': '{:.3f}',
+        'Prediction Drift (PSI)': '{:.4f}'
+    }).apply(lambda x: ['background-color: lightgreen' if x['Prediction Drift (PSI)'] < 0.1
+                       else 'background-color: lightblue' if x['Prediction Drift (PSI)'] < 0.25
+                       else 'background-color: lightcoral' for _ in x], axis=1),
+             use_container_width=True)
+
+    # --- Feature Drift Detection (CSI) ---
+    st.subheader("📊 Feature Drift Detection (CSI)")
+
+    # Run CSI feature drift
+    csi_results = csi_feature_drift()
+
+    # Create DataFrame for display
+    csi_df = pd.DataFrame({
+        'Feature': list(csi_results.keys()),
+        'CSI Value': list(csi_results.values())
+    })
+
+    # Add drift level
+    def get_csi_drift_level(csi):
+        if csi < 0.1:
+            return "Stable"
+        elif csi < 0.25:
+            return "Moderate Shift"
+        else:
+            return "Major Shift"
+
+    csi_df['Drift Level'] = csi_df['CSI Value'].apply(get_csi_drift_level)
+
+    csi_df_styled = csi_df.style.format({'CSI Value': '{:.4f}'})
+
+    csi_df_styled = csi_df_styled.map(
+        lambda val: (
+            'background-color: lightgreen' if val == "Stable"
+            else 'background-color: lightblue' if val == "Moderate Shift"
+            else 'background-color: lightcoral'
+        ),
+        subset=['Drift Level']  # only style Drift Level column
+    )
+
+    st.dataframe(csi_df_styled, use_container_width=True)
+
+    # --- Drift Visualizations ---
+    st.subheader("📈 Drift Visualizations")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Feature Drift Bar Chart
+        fig_feature_drift = px.bar(
+            csi_df,
+            x='Feature',
+            y='CSI Value',
+            color='Drift Level',
+            color_discrete_map={'Stable': 'green', 'Moderate Shift': 'orange', 'Major Shift': 'red'},
+            title='Feature Drift (CSI Values)',
+            labels={'CSI Value': 'CSI Value'}
+        )
+        fig_feature_drift.add_hline(y=0.1, line_dash="dash", line_color="green", annotation_text="Low Threshold")
+        fig_feature_drift.add_hline(y=0.25, line_dash="dash", line_color="red", annotation_text="High Threshold")
+        st.plotly_chart(fig_feature_drift, use_container_width=True)
+
+    with col2:
+        # Model Prediction Drift Bar Chart
+        fig_model_drift = px.bar(
+            drift_df,
+            x='Model',
+            y='Prediction Drift (PSI)',
+            color='Drift Level',
+            color_discrete_map={'Low': 'green', 'Moderate': 'orange', 'High': 'red'},
+            title='Model Prediction Drift (PSI Values)',
+            labels={'Prediction Drift (PSI)': 'PSI Value'}
+        )
+        fig_model_drift.add_hline(y=0.1, line_dash="dash", line_color="green", annotation_text="Low Threshold")
+        fig_model_drift.add_hline(y=0.25, line_dash="dash", line_color="red", annotation_text="High Threshold")
+        st.plotly_chart(fig_model_drift, use_container_width=True)
+
+    # KS Statistics Comparison
+    st.subheader("KS Statistics Comparison")
+    ks_df = drift_df[['Model', 'Refernece KS', 'Current KS']].melt(id_vars='Model', var_name='Dataset', value_name='KS Value')
+    fig_ks = px.bar(
+        ks_df,
+        x='Model',
+        y='KS Value',
+        color='Dataset',
+        barmode='group',
+        color_discrete_map={'Refernece KS': '#42A5F5', 'Current KS': '#FF7926'},
+        title='KS Statistics: Reference vs Current Data'
+    )
+    st.plotly_chart(fig_ks, use_container_width=True)
+
+    # --- Drift Detection Summary Dashboard ---
+    st.subheader("🎯 Drift Detection Summary")
+
+    # Calculate summary metrics
+    total_features = len(csi_df)
+    stable_features = len(csi_df[csi_df['CSI Value'] < 0.1])
+    moderate_drift_features = len(csi_df[(csi_df['CSI Value'] >= 0.1) & (csi_df['CSI Value'] < 0.25)])
+    major_drift_features = len(csi_df[csi_df['CSI Value'] >= 0.25])
+
+    total_models = len(drift_df)
+    low_drift_models = len(drift_df[drift_df['Prediction Drift (PSI)'] < 0.1])
+    moderate_drift_models = len(drift_df[(drift_df['Prediction Drift (PSI)'] >= 0.1) & (drift_df['Prediction Drift (PSI)'] < 0.25)])
+    high_drift_models = len(drift_df[drift_df['Prediction Drift (PSI)'] >= 0.25])
+
+    # Summary cards
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        stability_score = (stable_features / total_features) * 100
+        st.metric("Feature Stability", f"{stability_score:.1f}%",
+                 help=f"{stable_features}/{total_features} features are stable")
+
+    with col2:
+        model_stability_score = (low_drift_models / total_models) * 100
+        st.metric("Model Stability", f"{model_stability_score:.1f}%",
+                 help=f"{low_drift_models}/{total_models} models have low drift")
+
+    with col3:
+        critical_alerts = major_drift_features + high_drift_models
+        st.metric("Critical Alerts", critical_alerts,
+                 help="Features with major drift + models with high prediction drift")
+
+    with col4:
+        overall_health = (stability_score + model_stability_score) / 2
+        health_color = "🟢" if overall_health > 80 else "🟡" if overall_health > 60 else "🔴"
+        st.metric("Overall Health", f"{health_color} {overall_health:.1f}%")
+
+    # Quick status indicators
+    st.subheader("Quick Status Overview")
+
+    status_col1, status_col2 = st.columns(2)
+
+    with status_col1:
+        st.write("**Feature Drift Status:**")
+        if major_drift_features > 0:
+            st.error(f"🚨 {major_drift_features} features with major drift")
+        if moderate_drift_features > 0:
+            st.warning(f"⚠️ {moderate_drift_features} features with moderate drift")
+        if stable_features > 0:
+            st.success(f"✅ {stable_features} features stable")
+
+    with status_col2:
+        st.write("**Model Drift Status:**")
+        if high_drift_models > 0:
+            st.error(f"🚨 {high_drift_models} models with high prediction drift")
+        if moderate_drift_models > 0:
+            st.warning(f"⚠️ {moderate_drift_models} models with moderate prediction drift")
+        if low_drift_models > 0:
+            st.success(f"✅ {low_drift_models} models with low prediction drift")
+
+    
+
+    # --- Alerts & Thresholds ---
+    st.subheader("🚨 Monitoring Alerts")
+
+    alerts = []
+
+    # Check for high CSI values (feature drift)
+    high_csi_features = csi_df[csi_df['CSI Value'] > 0.25]
+    if not high_csi_features.empty:
+        alerts.append(f"⚠️ Major feature drift detected in: {', '.join(high_csi_features['Feature'].tolist())}")
+
+    # Check for high model prediction drift
+    high_drift_models = drift_df[drift_df['Prediction Drift (PSI)'] > 0.25]
+    if not high_drift_models.empty:
+        alerts.append(f"⚠️ High prediction drift in models: {', '.join(high_drift_models['Model'].tolist())}")
+
+    # Check for low accuracy (simulated threshold)
+    for model, metrics in all_metrics.items():
+        if metrics['Accuracy'] < 0.8:
+            alerts.append(f"⚠️ {model} accuracy below threshold (0.8)")
+
+    if alerts:
+        for alert in alerts:
+            st.error(alert)
+    else:
+        st.success("✅ No critical alerts detected")
+
+
+    # --- Business Metrics & Drift Impact ---
+    st.subheader("💼 Business Impact Metrics & Drift Impact")
+
+    # Calculate some business metrics
+    churn_rate = df['Exited'].mean() * 100
+    avg_balance_churned = df[df['Exited'] == 1]['Balance'].mean()
+    avg_balance_retained = df[df['Exited'] == 0]['Balance'].mean()
+
+    # Calculate potential revenue impact from drift
+    # Assuming models with high drift might lead to poor predictions
+    high_drift_models = drift_df[drift_df['Prediction Drift (PSI)'] > 0.25]
+    drift_impact_factor = len(high_drift_models) * 0.1  # 10% impact per high-drift model
+    adjusted_churn_rate = churn_rate * (1 + drift_impact_factor)
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Overall Churn Rate", f"{churn_rate:.1f}%")
+
+    with col2:
+        st.metric("Projected Churn Rate (with drift)", f"{adjusted_churn_rate:.1f}%",
+                 delta=f"+{adjusted_churn_rate - churn_rate:.1f}%")
+
+    with col3:
+        st.metric("Avg Balance (Churned)", f"${avg_balance_churned:,.0f}")
+
+    with col4:
+        st.metric("Avg Balance (Retained)", f"${avg_balance_retained:,.0f}")
+
+    # Revenue impact calculation
+    st.subheader("💰 Revenue Impact Analysis")
+
+    # Estimate potential lost revenue due to drift
+    total_customers = len(df)
+    churned_customers = int(total_customers * churn_rate / 100)
+    potential_lost_revenue = churned_customers * avg_balance_churned
+
+    # Impact from drift
+    additional_churn_due_to_drift = int(total_customers * (adjusted_churn_rate - churn_rate) / 100)
+    drift_lost_revenue = additional_churn_due_to_drift * avg_balance_churned
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Current Annual Lost Revenue", f"${potential_lost_revenue:,.0f}",
+                 help="Estimated revenue lost from current churn rate")
+
+    with col2:
+        st.metric("Additional Lost Revenue (Drift Impact)", f"${drift_lost_revenue:,.0f}",
+                 help="Additional revenue potentially lost due to model/feature drift",
+                 delta=f"+{drift_lost_revenue:,.0f}")
+
+    # Churn rate by segments
+    st.subheader("Churn Rate by Segments")
+
+    segment_churn = df.groupby('Geography')['Exited'].agg(['count', 'mean']).round(3)
+    segment_churn.columns = ['Count', 'Churn Rate']
+    segment_churn['Churn Rate %'] = (segment_churn['Churn Rate'] * 100).round(1)
+
+    st.dataframe(segment_churn[['Count', 'Churn Rate %']], use_container_width=True)
+
+    # Drift Impact by Geography (simulated)
+    st.subheader("Drift Impact by Geography")
+
+    # Simulate different drift impacts by geography
+    geography_drift = pd.DataFrame({
+        'Geography': ['France', 'Germany', 'Spain'],
+        'Current Churn %': segment_churn['Churn Rate %'].values,
+        'Drift Impact %': np.random.uniform(0.5, 2.0, 3).round(1)
+    })
+    geography_drift['Projected Churn %'] = geography_drift['Current Churn %'] + geography_drift['Drift Impact %']
+
+    st.dataframe(geography_drift.style.format({
+        'Current Churn %': '{:.1f}',
+        'Drift Impact %': '{:.1f}',
+        'Projected Churn %': '{:.1f}'
+    }), use_container_width=True)
