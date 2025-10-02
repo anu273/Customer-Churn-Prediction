@@ -5,4 +5,6 @@ joblib
 plotly
 scikit-learn
 lightgbm
+xgboost
 imblearn
+scipy
