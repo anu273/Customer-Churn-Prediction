@@ -1,17 +1,17 @@
 # models.py
 import joblib
 import pandas as pd
-
+import streamlit as st
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from lightgbm import LGBMClassifier
+from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
 
 
 # Load saved files
-scaler = joblib.load("scaler.pkl")
+Scaler = joblib.load("scaler.pkl")
 metrics_data = joblib.load("metrics_data.pkl")
 roc_data = joblib.load("roc_data.pkl")
 
@@ -21,14 +21,14 @@ num_cols = ["CreditScore","Age","Balance","EstimatedSalary",
 # Global variables to cache trained models
 rf_model = None
 gb_model = None
-lgbm_model = None
+xg_model = None
 
 def train_models():
-    global rf_model, gb_model, lgbm_model
+    global rf_model, gb_model, xg_model
 
     # If models are already trained, just return them
-    if rf_model is not None and gb_model is not None and lgbm_model is not None:
-        return rf_model, gb_model, lgbm_model
+    if rf_model is not None and gb_model is not None and xg_model is not None and Scaler is not None:
+        return rf_model, gb_model, xg_model
 
     # Otherwise, train models
     df = pd.read_csv("churn.csv", index_col=False)
@@ -60,20 +60,27 @@ def train_models():
     # Train models
     rf_model = RandomForestClassifier(bootstrap=False, max_depth=20, min_samples_split=5, n_estimators=300)
     gb_model = GradientBoostingClassifier(learning_rate=0.2, max_depth=5, n_estimators=300, subsample=0.9)
-    lgbm_model = LGBMClassifier(colsample_bytree=0.7, learning_rate=0.05, max_depth=10, n_estimators=300, num_leaves=100, subsample=0.8)
-
+    xg_model = XGBClassifier(colsample_bytree=0.8, enable_categorical=False, eval_metric='logloss', gamma=0.2, grow_policy=None,
+            learning_rate=0.1, max_depth=7, monotone_constraints=None, multi_strategy=None, n_estimators=300,
+            n_jobs=None, num_parallel_tree=None, random_state=None)
     rf_model.fit(X_train_res, y_train_res)
     gb_model.fit(X_train_res, y_train_res)
-    lgbm_model.fit(X_train_res, y_train_res)
+    xg_model.fit(X_train_res, y_train_res)
 
-    return rf_model, gb_model, lgbm_model
+    return rf_model, gb_model, xg_model
 
 
 def predict_all_models(input_dict):
 
     # Convert dict to DataFrame
     df = pd.DataFrame([input_dict])
-    rf_model, gb_model, lgbm_model = train_models()
+
+
+    if 'models' in st.session_state:
+        rf_model, gb_model, xg_model = st.session_state['models']
+    else:
+        rf_model, gb_model, xg_model = train_models()
+        st.session_state['models'] = (rf_model, gb_model, xg_model)
 
     
     #Change categorical to numerical value
@@ -87,7 +94,7 @@ def predict_all_models(input_dict):
 
 
     # Scale numeric columns using the already fitted scaler
-    df[num_cols] = scaler.transform(df[num_cols])
+    df[num_cols] = Scaler.transform(df[num_cols])
 
     results = {}
 
@@ -102,9 +109,9 @@ def predict_all_models(input_dict):
     results['Gradient Boosting'] = {'prediction': int(gb_pred), 'probability': float(gb_prob)}
 
     # LightGBM
-    lgbm_pred = lgbm_model.predict(df)[0]
-    lgbm_prob = lgbm_model.predict_proba(df)[0][1]
-    results['LightGBM'] = {'prediction': int(lgbm_pred), 'probability': float(lgbm_prob)}
+    xg_pred = xg_model.predict(df)[0]
+    xg_prob = xg_model.predict_proba(df)[0][1]
+    results['XGBoost'] = {'prediction': int(xg_pred), 'probability': float(xg_prob)}
 
     return results
 
@@ -125,5 +132,4 @@ def model_metrics():
     metrics = metrics_data
     roc = roc_data
     return metrics, roc 
-
 
